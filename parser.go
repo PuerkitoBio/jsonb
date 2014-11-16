@@ -3,8 +3,10 @@ package jsonb
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"unicode"
 )
 
 const DefaultChunkSize = 32 << 10 // 32K
@@ -18,6 +20,7 @@ const (
 	chrEsc
 	endLit
 	zroLit
+	comExp
 )
 
 type SyntaxError struct {
@@ -41,6 +44,8 @@ func (s *SyntaxError) Error() string {
 		suffix = " after top-level value"
 	case zroLit:
 		suffix = " after top-level value 0"
+	case comExp:
+		suffix = " looking for a comma"
 	}
 	return fmt.Sprintf("invalid character %q"+suffix, s.Char)
 }
@@ -63,10 +68,10 @@ const (
 	True
 	String
 	Number
-	ArrayStart
-	ArrayEnd
-	ObjectStart
 	ObjectEnd
+	ArrayEnd
+	ArrayStart
+	ObjectStart
 )
 
 var (
@@ -94,7 +99,7 @@ var (
 	falseLiteral = []byte{'a', 'l', 's', 'e'}
 )
 
-type state int
+type state byte
 
 const (
 	stArray state = iota
@@ -207,14 +212,39 @@ func (p *Parser) parseValue() bool {
 
 	p.buf.Reset()
 	comma := false
+	wantComma := p.wantComma()
+	wantValue := false
 
 try:
 	switch p.ch {
 	case '{':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 	case '}':
+		if wantValue {
+			p.error(&SyntaxError{Char: p.ch, typ: begVal})
+			return false
+		}
+
 	case ':':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+		if wantValue {
+			p.error(&SyntaxError{Char: p.ch, typ: begVal})
+			return false
+		}
 
 	case '[':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 		p.tok = ArrayStart
 		p.push(stArray)
 		p.store()
@@ -222,6 +252,11 @@ try:
 		return true
 
 	case ']':
+		if wantValue {
+			p.error(&SyntaxError{Char: p.ch, typ: begVal})
+			return false
+		}
+
 		p.tok = ArrayEnd
 		if !p.pop(stArray) {
 			return false
@@ -231,32 +266,59 @@ try:
 		return true
 
 	case ',':
-		// TODO : Comma can only follow value
-		if comma {
+		if comma || !wantComma {
 			p.error(&SyntaxError{Char: p.ch, typ: begVal})
 			return false
 		}
+
 		comma = true
+		wantComma = false
+		wantValue = true // a value must follow the comma
 		p.next(true)
 		goto try
 
 	case 't':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 		p.tok = True
 		p.parseLiteral(trueLiteral)
 
 	case 'f':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 		p.tok = False
 		p.parseLiteral(falseLiteral)
 
 	case 'n':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 		p.tok = Null
 		p.parseLiteral(nullLiteral)
 
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 		p.tok = Number
 		p.parseNumber()
 
 	case '"':
+		if wantComma {
+			p.error(&SyntaxError{Char: p.ch, typ: comExp})
+			return false
+		}
+
 		p.tok = String
 		p.parseString()
 
@@ -380,6 +442,10 @@ loop:
 	if !lastIsDigit {
 		p.error(&SyntaxError{Char: p.ch, typ: endLit})
 	}
+
+	if isWhitespace(p.ch) {
+		p.next(true)
+	}
 }
 
 func (p *Parser) parseNumber() {
@@ -437,6 +503,10 @@ loop:
 	if !lastIsDigit {
 		p.error(&SyntaxError{Char: p.ch, typ: endLit})
 	}
+
+	if isWhitespace(p.ch) {
+		p.next(true)
+	}
 }
 
 // store saves the current rune in the internal buffer.
@@ -475,6 +545,11 @@ func (p *Parser) next(skipWhite bool) bool {
 			p.error(err)
 			return false
 		}
+		if r == unicode.ReplacementChar {
+			// invalid unicode code point
+			p.error(errors.New("jsonb: invalid unicde code point"))
+			return false
+		}
 
 		if !skipWhite || !isWhitespace(r) {
 			break
@@ -482,6 +557,16 @@ func (p *Parser) next(skipWhite bool) bool {
 	}
 	p.ch = r
 	return true
+}
+
+func (p *Parser) wantComma() bool {
+	l := len(p.stack)
+	if l == 0 {
+		return false
+	}
+	st := p.stack[l-1]
+	return (st == stArray || st == stObjVal) &&
+		p.tok >= Null && p.tok <= ArrayEnd
 }
 
 // isWhitespace returns true if the rune is a JSON whitespace.

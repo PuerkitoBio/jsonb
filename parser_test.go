@@ -30,6 +30,7 @@ func TestParser(t *testing.T) {
 		{in: "falsez", toks: []Token{Invalid}, bytes: []string{"false"}, err: &SyntaxError{Char: 'z', typ: endLit}},
 		{in: "truez", toks: []Token{Invalid}, bytes: []string{"true"}, err: &SyntaxError{Char: 'z', typ: endLit}},
 		{in: "nullz", toks: []Token{Invalid}, bytes: []string{"null"}, err: &SyntaxError{Char: 'z', typ: endLit}},
+		{in: "null,", toks: []Token{Null, Invalid}, bytes: []string{"null", ""}, err: &SyntaxError{Char: ',', typ: begVal}},
 
 		// string literals
 		{in: `""`, toks: []Token{String}, bytes: []string{`""`}},
@@ -42,6 +43,8 @@ func TestParser(t *testing.T) {
 		{in: `"\udEfF"`, toks: []Token{String}, bytes: []string{`"\udEfF"`}},
 		{in: `"\z"`, toks: []Token{Invalid}, bytes: []string{`"\`}, err: &SyntaxError{Char: 'z', typ: chrEsc}},
 		{in: `"\uab_e"`, toks: []Token{Invalid}, bytes: []string{`"\uab`}, err: &SyntaxError{Char: '_', typ: hexEsc}},
+		{in: `,"a"`, toks: []Token{Invalid}, bytes: []string{``}, err: &SyntaxError{Char: ',', typ: begVal}},
+		{in: `"a",`, toks: []Token{String, Invalid}, bytes: []string{`"a"`, ""}, err: &SyntaxError{Char: ',', typ: begVal}},
 
 		// number literals
 		{in: `0`, toks: []Token{Number}, bytes: []string{`0`}},
@@ -65,17 +68,20 @@ func TestParser(t *testing.T) {
 		{in: `123.`, toks: []Token{Invalid}, bytes: []string{`123.`}, err: &SyntaxError{Char: -1, typ: endLit}},
 		{in: `123.4e`, toks: []Token{Invalid}, bytes: []string{`123.4e`}, err: &SyntaxError{Char: -1, typ: endLit}},
 		{in: `123.4e-`, toks: []Token{Invalid}, bytes: []string{`123.4e-`}, err: &SyntaxError{Char: -1, typ: endLit}},
+		{in: `,0`, toks: []Token{Invalid}, bytes: []string{``}, err: &SyntaxError{Char: ',', typ: begVal}},
+		{in: `0 , `, toks: []Token{Number, Invalid}, bytes: []string{`0`, ""}, err: &SyntaxError{Char: ',', typ: begVal}},
 
 		// array
 		{in: `[]`, toks: []Token{ArrayStart, ArrayEnd}, bytes: []string{"[", "]"}},
 		{in: `[true]`, toks: []Token{ArrayStart, True, ArrayEnd}, bytes: []string{"[", "true", "]"}},
 		{in: `[true, 1, "a"]`, toks: []Token{ArrayStart, True, Number, String, ArrayEnd}, bytes: []string{"[", "true", "1", `"a"`, "]"}},
 		{in: `[true, , 1]`, toks: []Token{ArrayStart, True, Invalid}, bytes: []string{"[", "true", ""}, err: &SyntaxError{Char: ',', typ: begVal}},
-		//{in: `[,1]`, toks: []Token{ArrayStart, Invalid}, bytes: []string{"[", ""}, err: &SyntaxError{Char: ',', typ: begVal}},
+		{in: `[,1]`, toks: []Token{ArrayStart, Invalid}, bytes: []string{"[", ""}, err: &SyntaxError{Char: ',', typ: begVal}},
 		{in: `true, , 1]`, toks: []Token{True, Invalid}, bytes: []string{"true", ""}, err: &SyntaxError{Char: ',', typ: begVal}},
 		{in: `[true, 1, "a",  [  false, 2, "b" ],   null]`, toks: []Token{ArrayStart, True, Number, String,
 			ArrayStart, False, Number, String, ArrayEnd, Null, ArrayEnd}, bytes: []string{"[", "true", "1", `"a"`,
 			"[", "false", "2", `"b"`, "]", "null", "]"}},
+		{in: `[1   , ]`, toks: []Token{ArrayStart, Number, Invalid}, bytes: []string{"[", "1", ""}, err: &SyntaxError{Char: ']', typ: begVal}},
 	}
 
 	p := NewParser(nil)
